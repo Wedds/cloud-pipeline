@@ -63,11 +63,11 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
                                   final IndexRequestContainer requestContainer) {
         final Iterable<Blob> blobs = getAllBlobsFromStorage(dataStorage, credentials);
         blobs.forEach(file -> indexFile(requestContainer,
-                file,
-                dataStorage,
-                credentials,
-                permissionsContainer,
-                indexName));
+                                        file,
+                                        dataStorage,
+                                        credentials,
+                                        permissionsContainer,
+                                        indexName));
     }
 
     Iterable<Blob> getAllBlobsFromStorage(final AbstractDataStorage dataStorage,
@@ -108,12 +108,12 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
                            final String indexName) {
         convertToStorageFile(file)
                 .ifPresent(
-                    item -> indexContainer
-                            .add(createIndexRequest(item,
-                                        indexName,
-                                        storage,
-                                        credentials.getRegion(),
-                                        permissions)));
+                        item -> indexContainer
+                                .add(createIndexRequest(item,
+                                                        indexName,
+                                                        storage,
+                                                        credentials.getRegion(),
+                                                        permissions)));
     }
 
     private Optional<DataStorageFile> convertToStorageFile(final Blob blob) {
@@ -138,12 +138,12 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
     }
 
     IndexRequest createIndexRequest(final DataStorageFile item,
-                                            final String indexName,
-                                            final AbstractDataStorage storage,
-                                            final String region,
-                                            final PermissionsContainer permissions) {
+                                    final String indexName,
+                                    final AbstractDataStorage storage,
+                                    final String region,
+                                    final PermissionsContainer permissions) {
         return new IndexRequest(indexName, DOC_MAPPING_TYPE)
                 .source(fileMapper.fileToDocument(item, storage, region, permissions,
-                        SearchDocumentType.GS_FILE));
+                                                  SearchDocumentType.GS_FILE));
     }
 }
