@@ -27,25 +27,26 @@ import com.google.api.services.storage.StorageScopes;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.storage.Blob;
-import com.google.cloud.storage.Bucket;
 import com.google.cloud.storage.Storage;
+import com.google.cloud.storage.StorageClass;
 import com.google.cloud.storage.StorageOptions;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.elasticsearch.action.index.IndexRequest;
 
+import java.text.DateFormat;
 import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.Collections;
-import java.util.Date;
-import java.util.Optional;
+import java.util.*;
 
 import static com.epam.pipeline.elasticsearchagent.utils.ESConstants.DOC_MAPPING_TYPE;
 
 @Slf4j
 public class GsBucketFileManager implements ObjectStorageFileManager {
+    private static final String DATE_TIME_FORMAT_PATTERN = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+    private static final String TIME_ZONE = "UTC";
     private final StorageFileMapper fileMapper = new StorageFileMapper();
 
     @Override
@@ -54,27 +55,20 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
                                   final TemporaryCredentials credentials,
                                   final PermissionsContainer permissionsContainer,
                                   final IndexRequestContainer requestContainer) {
-
-        final Bucket bucket = getGoogleBucket(dataStorage, credentials);
-        final Iterable<Blob> blobs = getAllBlobsFromBucket(bucket);
+        final Iterable<Blob> blobs = getAllBlobsFromStorage(dataStorage, credentials);
         blobs.forEach(file -> indexFile(requestContainer,
                 file,
                 dataStorage,
-                credentials.getRegion(),
+                credentials,
                 permissionsContainer,
                 indexName));
     }
 
-    Iterable<Blob> getAllBlobsFromBucket(final Bucket bucket) {
-        return bucket.list()
-                .iterateAll();
-    }
-
-    Bucket getGoogleBucket(final AbstractDataStorage dataStorage,
-                           final TemporaryCredentials credentials) {
-        final Storage storage = getGoogleStorage(credentials);
+    Iterable<Blob> getAllBlobsFromStorage(final AbstractDataStorage dataStorage,
+                                          final TemporaryCredentials credentials) {
+        final Storage googleStorage = getGoogleStorage(credentials);
         final String bucketName = dataStorage.getName();
-        return storage.get(bucketName);
+        return googleStorage.list(bucketName).iterateAll();
     }
 
     private Storage getGoogleStorage(final TemporaryCredentials credentials) {
@@ -82,18 +76,21 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
         return StorageOptions
                 .newBuilder()
                 .setCredentials(googleCredentials)
+                .setProjectId(credentials.getAccessKey())
                 .build()
                 .getService();
     }
 
     private GoogleCredentials createGoogleCredentials(final TemporaryCredentials credentials) {
         try {
-            final Date expirationDate = ESConstants.FILE_DATE_FORMAT.parse(credentials.getExpirationTime());
+            final DateFormat format =
+                    new SimpleDateFormat(DATE_TIME_FORMAT_PATTERN);
+            format.setTimeZone(TimeZone.getTimeZone(TIME_ZONE));
+            final Date expirationDate = format.parse(credentials.getExpirationTime());
             final AccessToken token = new AccessToken(credentials.getToken(), expirationDate);
-
             return GoogleCredentials
                     .create(token)
-                    .createScoped(Collections.singletonList(StorageScopes.CLOUD_PLATFORM_READ_ONLY));
+                    .createScoped(Collections.singletonList(StorageScopes.DEVSTORAGE_READ_ONLY));
         } catch (ParseException e) {
             log.error(e.getMessage());
             throw new DateTimeParseException(e.getMessage(), credentials.getExpirationTime(), e.getErrorOffset());
@@ -103,22 +100,22 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
     private void indexFile(final IndexRequestContainer indexContainer,
                            final Blob file,
                            final AbstractDataStorage storage,
-                           final String region,
+                           final TemporaryCredentials credentials,
                            final PermissionsContainer permissions,
                            final String indexName) {
         Optional.ofNullable(convertToStorageFile(file))
                 .ifPresent(
                     item -> indexContainer
-                                .add(createIndexRequest(item,
-                                        indexName,
-                                        storage,
-                                        region,
-                                        permissions)));
+                            .add(createIndexRequest(item,
+                                    indexName,
+                                    storage,
+                                    credentials.getRegion(),
+                                    permissions)));
     }
 
     private DataStorageFile convertToStorageFile(final Blob blob) {
         final String relativePath = blob.getName();
-        if (StringUtils.endsWithIgnoreCase(relativePath, ESConstants.HIDDEN_FILE_NAME.toLowerCase())) {
+        if (StringUtils.endsWithIgnoreCase(relativePath, ESConstants.HIDDEN_FILE_NAME)) {
             return null;
         }
         final DataStorageFile file = new DataStorageFile();
@@ -128,9 +125,12 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
         file.setChanged(ESConstants.FILE_DATE_FORMAT.format(Date.from(Instant.ofEpochMilli(blob.getUpdateTime()))));
         file.setVersion(null);
         file.setDeleteMarker(null);
-        file.setTags(MapUtils.emptyIfNull(blob.getMetadata()));
-        Optional.ofNullable(blob.getStorageClass())
-                .ifPresent(sc -> file.setLabels(Collections.singletonMap("StorageClass", sc.name())));
+        Map<String, String> labels = new HashMap<>(blob.getMetadata());
+        StorageClass storageClass = blob.getStorageClass();
+        if (storageClass != null) {
+            labels.put("StorageClass", storageClass.name());
+        }
+        file.setLabels(labels);
         return file;
     }
 
@@ -143,4 +143,5 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
                 .source(fileMapper.fileToDocument(item, storage, region, permissions,
                         SearchDocumentType.GS_FILE));
     }
+
 }

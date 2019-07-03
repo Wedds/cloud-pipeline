@@ -20,7 +20,6 @@ import com.epam.pipeline.elasticsearchagent.utils.ESConstants;
 import com.epam.pipeline.entity.datastorage.AbstractDataStorage;
 import com.epam.pipeline.entity.datastorage.TemporaryCredentials;
 import com.google.cloud.storage.Blob;
-import com.google.cloud.storage.Bucket;
 import com.google.cloud.storage.StorageClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -46,8 +45,6 @@ public class GsBucketFileManagerTest {
     private PermissionsContainer permissionsContainer;
     @Mock
     private IndexRequestContainer requestContainer;
-    @Mock
-    private Bucket bucket;
 
     @Test
     public void shouldAddZeroFilesToRequestContainer() {
@@ -68,13 +65,9 @@ public class GsBucketFileManagerTest {
     }
 
     private void verifyAddedRequestCount(final List<Blob> files, final int numberOfInvocation) {
-        Mockito.doReturn(bucket)
-                .when(manager)
-                .getGoogleBucket(Mockito.any(), Mockito.any());
         Mockito.doReturn(files)
                 .when(manager)
-                .getAllBlobsFromBucket(bucket);
-
+                .getAllBlobsFromStorage(dataStorage, temporaryCredentials);
         manager.listAndIndexFiles(indexName,
                 dataStorage,
                 temporaryCredentials,
@@ -99,4 +92,5 @@ public class GsBucketFileManagerTest {
     private Blob createHiddenBlob(final String name) {
         return createBlob(name + ESConstants.HIDDEN_FILE_NAME.toLowerCase());
     }
+
 }
