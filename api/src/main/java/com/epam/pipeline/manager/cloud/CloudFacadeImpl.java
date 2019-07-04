@@ -20,6 +20,7 @@ import com.epam.pipeline.common.MessageConstants;
 import com.epam.pipeline.common.MessageHelper;
 import com.epam.pipeline.entity.cloud.InstanceTerminationState;
 import com.epam.pipeline.entity.cluster.InstanceOffer;
+import com.epam.pipeline.entity.cluster.InstanceType;
 import com.epam.pipeline.entity.cluster.NodeRegionLabels;
 import com.epam.pipeline.entity.pipeline.PipelineRun;
 import com.epam.pipeline.entity.pipeline.RunInstance;
@@ -163,6 +164,13 @@ public class CloudFacadeImpl implements CloudFacade {
                     return envVars;
                 })
                 .flatMap(map -> map.entrySet().stream())
+                .filter(entry -> {
+                    if (entry.getValue() == null) {
+                        log.warn("Cloud environment variable {} is null.", entry.getKey());
+                        return false;
+                    }
+                    return true;
+                })
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (e1, e2) -> e2));
     }
 
@@ -171,6 +179,16 @@ public class CloudFacadeImpl implements CloudFacade {
             final Long regionId, final String instanceId) {
         final AbstractCloudRegion region = regionManager.loadOrDefault(regionId);
         return getInstanceService(region).getInstanceTerminationState(region, instanceId);
+    }
+
+    @Override
+    public List<InstanceType> getAllInstanceTypes(final Long regionId, final boolean spot) {
+        if (regionId == null) {
+            return loadInstancesForAllRegions(spot);
+        } else {
+            final AbstractCloudRegion region = regionManager.loadOrDefault(regionId);
+            return getInstancePriceService(region).getAllInstanceTypes(region.getId(), spot);
+        }
     }
 
     @Override
@@ -192,7 +210,6 @@ public class CloudFacadeImpl implements CloudFacade {
         return getInstancePriceService(region).getSpotPrice(instanceType, region);
     }
 
-
     private AbstractCloudRegion getRegionByRunId(final Long runId) {
         try {
             final PipelineRun run = pipelineRunManager.loadPipelineRun(runId);
@@ -204,6 +221,14 @@ public class CloudFacadeImpl implements CloudFacade {
             final NodeRegionLabels nodeRegion = kubernetesManager.getNodeRegion(String.valueOf(runId));
             return regionManager.load(nodeRegion.getCloudProvider(), nodeRegion.getRegionCode());
         }
+    }
+
+    private List<InstanceType> loadInstancesForAllRegions(final Boolean spot) {
+        return (List<InstanceType>) instancePriceServices.values()
+                .stream()
+                .map(priceService -> priceService.getAllInstanceTypes(null, spot))
+                .flatMap(cloudInstanceTypes -> cloudInstanceTypes.stream())
+                .collect(Collectors.toList());
     }
 
     private CloudInstanceService getInstanceService(final AbstractCloudRegion region) {

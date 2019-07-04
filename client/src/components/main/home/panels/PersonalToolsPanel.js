@@ -347,7 +347,13 @@ export default class PersonalToolsPanel extends React.Component {
           }
           return result;
         };
-        const allowedInstanceTypesRequest = new AllowedInstanceTypes(tool.id);
+        const allowedInstanceTypesRequest = new AllowedInstanceTypes(
+          tool.id,
+          null,
+          parameterIsNotEmpty(versionSettingValue('is_spot'))
+            ? versionSettingValue('is_spot')
+            : this.props.preferences.useSpot
+        );
         await allowedInstanceTypesRequest.fetch();
         let availableInstanceTypes = [];
         let availablePriceTypes = [];
@@ -643,6 +649,8 @@ export default class PersonalToolsPanel extends React.Component {
             this.state.runToolInfo &&
             (this.state.runToolInfo.payload.isSpot || !this.state.runToolInfo.payload.instanceType) &&
               <RunConfirmation
+                cloudRegions={this.props.awsRegions.loaded ? (this.props.awsRegions.value || []).map(r => r) : []}
+                cloudRegionId={this.state.runToolInfo.payload.cloudRegionId}
                 onChangePriceType={this.onChangePriceType}
                 onChangeInstanceType={this.onChangeInstanceType}
                 warning={this.state.runToolInfo.warning}

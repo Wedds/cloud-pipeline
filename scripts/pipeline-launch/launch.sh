@@ -236,7 +236,7 @@ function cp_cap_init {
 
             if [ "$cluster_role" = "master" ] && check_cp_cap "CP_CAP_AUTOSCALE" && check_cp_cap "CP_CAP_SGE"
             then
-                  $CP_PYTHON2_PATH $COMMON_REPO_DIR/scripts/autoscale_sge.py &
+                  nohup $CP_PYTHON2_PATH $COMMON_REPO_DIR/scripts/autoscale_sge.py 1>/dev/null 2>$LOG_DIR/.nohup.sge.autoscale.log &
             fi
       fi
 }
@@ -1168,9 +1168,29 @@ fi
 
 
 ######################################################
+# Setup "modules" support
+######################################################
+
+echo "Setup Environment Modules support"
+echo "-"
+
+if [ "$CP_CAP_MODULES" == "true" ]; then
+      modules_setup
+else
+    echo "Environment Modules support is not requested"
+fi
+
+######################################################
+
+
+
+######################################################
 echo Executing task
 echo "-"
 ######################################################
+
+# Check whether there are any capabilities init scripts available and execute them before main SCRIPT
+cp_cap_init
 
 # As some environments do not support "sleep infinity" command - it is substituted with "sleep 10000d"
 SCRIPT="${SCRIPT/sleep infinity/sleep 10000d}"
@@ -1181,9 +1201,6 @@ if [ ! -d "$ANALYSIS_DIR" ]; then
 fi
 cd $ANALYSIS_DIR
 echo "CWD is now at $ANALYSIS_DIR"
-
-# Check whether there are any capabilities init scripts available and execute them before main SCRIPT
-cp_cap_init
 
 # Tell the environment that initilization phase is finished and a source script is going to be executed
 pipe_log SUCCESS "Environment initialization finished" "InitializeEnvironment"
