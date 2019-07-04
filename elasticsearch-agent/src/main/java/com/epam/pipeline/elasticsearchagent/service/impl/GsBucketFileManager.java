@@ -34,7 +34,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.elasticsearch.action.index.IndexRequest;
 
-import java.text.DateFormat;
 import java.text.ParseException;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -49,8 +48,12 @@ import static com.epam.pipeline.elasticsearchagent.utils.ESConstants.DOC_MAPPING
 
 @Slf4j
 public class GsBucketFileManager implements ObjectStorageFileManager {
-    private static final String TIME_ZONE = "UTC";
     private final StorageFileMapper fileMapper = new StorageFileMapper();
+
+    static {
+        TimeZone tz = TimeZone.getTimeZone("UTC");
+        ESConstants.FILE_DATE_FORMAT.setTimeZone(tz);
+    }
 
     @Override
     public void listAndIndexFiles(final String indexName,
@@ -86,9 +89,7 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
 
     private GoogleCredentials createGoogleCredentials(final TemporaryCredentials credentials) {
         try {
-            final DateFormat format = ESConstants.FILE_DATE_FORMAT;
-            format.setTimeZone(TimeZone.getTimeZone(TIME_ZONE));
-            final Date expirationDate = format.parse(credentials.getExpirationTime());
+            final Date expirationDate = ESConstants.FILE_DATE_FORMAT.parse(credentials.getExpirationTime());
             final AccessToken token = new AccessToken(credentials.getToken(), expirationDate);
             return GoogleCredentials
                     .create(token)
@@ -130,7 +131,7 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
         final Map<String, String> labels = new HashMap<>(blob.getMetadata());
         final StorageClass storageClass = blob.getStorageClass();
         if (storageClass != null) {
-            labels.put("StorageClass", storageClass.name());
+            labels.put(ESConstants.STORAGE_CLASS_LABEL, storageClass.name());
         }
         file.setLabels(labels);
         return Optional.of(file);
