@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 public enum DataStorageType {
     S3("S3"),
     NFS("NFS"),
+    GS("GS"),
     AZ("AZ");
 
     private String id;
