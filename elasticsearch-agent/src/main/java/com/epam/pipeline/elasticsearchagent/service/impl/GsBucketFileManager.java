@@ -137,7 +137,7 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
         return Optional.of(file);
     }
 
-    private IndexRequest createIndexRequest(final DataStorageFile item,
+    IndexRequest createIndexRequest(final DataStorageFile item,
                                             final String indexName,
                                             final AbstractDataStorage storage,
                                             final String region,
