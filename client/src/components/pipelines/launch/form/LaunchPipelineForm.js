@@ -61,6 +61,7 @@ import FireCloudMethodSnapshotConfigurationsRequest
 import FireCloudMethodParameters
   from '../../../../models/firecloud/FireCloudMethodParameters';
 import LoadingView from '../../../special/LoadingView';
+import {getSpotTypeName} from '../../../special/spot-instance-names';
 import DTSClusterInfo from '../../../../models/dts/DTSClusterInfo';
 import {
   autoScaledClusterEnabled,
@@ -88,8 +89,18 @@ const FIRE_CLOUD_ENVIRONMENT = 'FIRECLOUD';
 const DTS_ENVIRONMENT = 'DTS';
 
 function onValuesChange (props, fields) {
-  if (fields && fields.exec && fields.exec.cloudRegionId && props.allowedInstanceTypes) {
-    props.allowedInstanceTypes.regionId = +fields.exec.cloudRegionId;
+  if (fields &&
+    fields.exec &&
+    fields.exec.cloudRegionId &&
+    props.allowedInstanceTypes) {
+    props.allowedInstanceTypes.setRegionId(+fields.exec.cloudRegionId);
+  }
+  if (fields &&
+    fields[ADVANCED] &&
+    fields[ADVANCED].is_spot !== undefined &&
+    fields[ADVANCED].is_spot !== null &&
+    props.allowedInstanceTypes) {
+    props.allowedInstanceTypes.setIsSpot(`${fields[ADVANCED].is_spot}` === 'true');
   }
 }
 
@@ -102,15 +113,20 @@ function getFormItemClassName (rootClass, key) {
 
 @Form.create({onValuesChange: onValuesChange})
 @inject('runDefaultParameters', 'googleApi', 'awsRegions', 'dtsList', 'preferences', 'dockerRegistries')
-@inject((stores, params) => {
-  if (params.allowedInstanceTypes && params.parameters && params.parameters.cloudRegionId) {
-    params.allowedInstanceTypes.initialRegionId = params.parameters.cloudRegionId;
-  }
-  return {};
-})
 @localization.localizedComponent
 @observer
 export default class LaunchPipelineForm extends localization.LocalizedReactComponent {
+
+  localizedStringWithSpotDictionaryFn = (key) => {
+    return this.localizedString(
+      key,
+      [
+        {key: 'spot', value: getSpotTypeName(true, this.currentCloudRegionProvider)},
+        {key: 'on-demand', value: getSpotTypeName(false, this.currentCloudRegionProvider)},
+        {key: 'on demand', value: getSpotTypeName(false, this.currentCloudRegionProvider)}
+      ]
+    );
+  };
 
   isDts = (props = this.props) => {
     if (!this.props.detached) {
@@ -990,7 +1006,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
   @computed
   get priceTypes () {
     if (!this.props.allowedInstanceTypes || !this.props.allowedInstanceTypes.loaded) {
-      return [];
+      return [true, false];
     }
     return (this.props.allowedInstanceTypes.value[names.allowedPriceTypes] || [])
       .map(v => {
@@ -2326,7 +2342,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
                 }
                 {
                   isSystemParametersSection && systemParameterHint &&
-                  hints.renderHint(this.localizedString, systemParameterHint, null, {marginLeft: 15})
+                  hints.renderHint(this.localizedStringWithSpotDictionaryFn, systemParameterHint, null, {marginLeft: 15})
                 }
               </Col>
             </FormItem>
@@ -2451,7 +2467,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
             </FormItem>
           </Col>
           <Col span={1} style={{marginLeft: 7, marginTop: 3}}>
-            {hints.renderHint(this.localizedString, hints.prettyUrlHint)}
+            {hints.renderHint(this.localizedStringWithSpotDictionaryFn, hints.prettyUrlHint)}
           </Col>
         </FormItem>
       );
@@ -2481,7 +2497,13 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
             initialValue: this.correctInstanceTypeValue(this.getDefaultValue('instance_size'))
           })(
           <Select
-            disabled={!!this.state.fireCloudMethodName || (this.props.readOnly && !this.props.canExecute)}
+            disabled={
+              !!this.state.fireCloudMethodName ||
+              (this.props.readOnly && !this.props.canExecute) ||
+              (
+                this.props.allowedInstanceTypes &&
+                (this.props.allowedInstanceTypes.changed || this.props.allowedInstanceTypes.pending)
+              )}
             showSearch
             allowClear={false}
             placeholder="Node type"
@@ -2496,14 +2518,16 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
                 .filter((familyName, index, array) => array.indexOf(familyName) === index)
                 .map(instanceFamily => {
                   return (
-                    <Select.OptGroup key={instanceFamily || 'Other'} label={instanceFamily || 'Other'}>
+                    <Select.OptGroup key={instanceFamily || 'Other'} label={instanceFamily || 'Other'} >
                       {
                         this.instanceTypes
                           .filter(t => t.instanceFamily === instanceFamily)
                           .map(t =>
                             <Select.Option
                               key={t.sku}
-                              value={t.name}>
+                              value={t.name}
+                              title={`${t.name} (CPU: ${t.vcpu}, RAM: ${t.memory}${t.gpu ? `, GPU: ${t.gpu}` : ''})`}
+                            >
                               {t.name} (CPU: {t.vcpu}, RAM: {t.memory}{t.gpu ? `, GPU: ${t.gpu}`: ''})
                             </Select.Option>
                           )
@@ -2540,7 +2564,14 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
             initialValue: this.getDefaultValue('cloudRegionId') || this.defaultCloudRegionId
           })(
           <Select
-            disabled={!!this.state.fireCloudMethodName || (this.props.readOnly && !this.props.canExecute)}
+            disabled={
+              !!this.state.fireCloudMethodName ||
+              (this.props.readOnly && !this.props.canExecute) ||
+              (
+                this.props.allowedInstanceTypes &&
+                (this.props.allowedInstanceTypes.changed || this.props.allowedInstanceTypes.pending)
+              )
+            }
             showSearch
             allowClear={false}
             placeholder="Cloud Region"
@@ -2556,8 +2587,13 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
                     <Select.Option
                       key={`${region.id}`}
                       name={region.name}
+                      title={region.name}
                       value={`${region.id}`}>
-                      <AWSRegionTag regionUID={region.regionId} /> {region.name}
+                      <AWSRegionTag
+                        provider={region.provider}
+                        regionUID={region.regionId}
+                        style={{fontSize: 'larger'}}
+                      /> {region.name}
                     </Select.Option>
                   );
                 })
@@ -2789,9 +2825,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
                     this.priceTypes.map(p => {
                       return (
                         <Select.Option key={`${p}`} value={`${p}`}>
-                          {
-                            `${p}` === 'true' ? 'Spot' : 'On-demand'
-                          }
+                          {getSpotTypeName(p, this.currentCloudRegionProvider)}
                         </Select.Option>
                       );
                     })
@@ -2801,7 +2835,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
             </FormItem>
           </Col>
           <Col span={1} style={{marginLeft: 7, marginTop: 3}}>
-            {hints.renderHint(this.localizedString, hints.priceTypeHint)}
+            {hints.renderHint(this.localizedStringWithSpotDictionaryFn, hints.priceTypeHint)}
           </Col>
         </Row>
       </FormItem>
@@ -2831,7 +2865,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
                   </Checkbox>
                 </Col>
                 <Col span={1} style={{marginLeft: 7, marginTop: 3}}>
-                  {hints.renderHint(this.localizedString, hints.autoPauseHint)}
+                  {hints.renderHint(this.localizedStringWithSpotDictionaryFn, hints.autoPauseHint)}
                 </Col>
               </Row>
             </Col>
@@ -2872,7 +2906,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
           </FormItem>
         </Col>
         <Col span={1} style={{marginLeft: 7, marginTop: 3}}>
-          {hints.renderHint(this.localizedString, hints.timeOutHint)}
+          {hints.renderHint(this.localizedStringWithSpotDictionaryFn, hints.timeOutHint)}
         </Col>
       </FormItem>
     );
@@ -2905,7 +2939,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
             </FormItem>
           </div>
           <div style={{marginLeft: 7, marginTop: 3}}>
-            {hints.renderHint(this.localizedString, hints.limitMountsHint)}
+            {hints.renderHint(this.localizedStringWithSpotDictionaryFn, hints.limitMountsHint)}
           </div>
         </Row>
       </FormItem>
@@ -2930,7 +2964,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
               value={this.state.startIdle}>
               Start idle
             </Checkbox>
-            {hints.renderHint(this.localizedString, hints.startIdleHint)}
+            {hints.renderHint(this.localizedStringWithSpotDictionaryFn, hints.startIdleHint)}
           </Row>
           {
             !this.state.startIdle
@@ -3128,7 +3162,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
       case ADVANCED:
         const isSpot = `${this.getSectionFieldValue(ADVANCED)('is_spot') ||
           this.getDefaultValue('is_spot')}` === 'true';
-        descriptions.push(isSpot ? 'Spot' : 'On-demand');
+        descriptions.push(getSpotTypeName(isSpot, this.currentCloudRegionProvider));
         const timeout = this.getSectionFieldValue(ADVANCED)('timeout') || this.getDefaultValue('timeout');
         if (timeout && !isNaN(timeout)) {
           descriptions.push(`Timeout: ${timeout} min`);
@@ -3358,7 +3392,7 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
         <Row type="flex" className={styles.formItemContainer} style={options ? options.containerStyle : undefined}>
           {content}
           <div className={styles.hintContainer}>
-            {hint ? hints.renderHint(this.localizedString, hint) : '\u00A0'}
+            {hint ? hints.renderHint(this.localizedStringWithSpotDictionaryFn, hint) : '\u00A0'}
           </div>
         </Row>
       );
@@ -3704,6 +3738,14 @@ export default class LaunchPipelineForm extends localization.LocalizedReactCompo
   };
 
   componentDidMount () {
+    // if (this.props.allowedInstanceTypes) {
+    //   if (this.props.parameters && this.props.parameters.is_spot !== undefined &&
+    //     this.props.parameters.is_spot !== null) {
+    //     this.props.allowedInstanceTypes.setIsSpot(`${this.props.parameters.is_spot}` === 'true');
+    //   } else {
+    //     this.props.allowedInstanceTypes.setIsSpot(`${this.props.defaultPriceTypeIsSpot}` === 'true');
+    //   }
+    // }
     this.reset(true);
     this.evaluateEstimatedPrice({});
     this.prepare();

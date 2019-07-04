@@ -25,8 +25,8 @@ import java.util.stream.Collectors;
 public enum DataStorageType {
     S3("S3"),
     NFS("NFS"),
-    GS("GS"),
-    AZ("AZ");
+    AZ("AZ"),
+    GS("GS");
 
     private String id;
     private static Map<String, DataStorageType> idMap;
@@ -72,6 +72,7 @@ public enum DataStorageType {
         switch (provider) {
             case AWS: return S3;
             case AZURE: return AZ;
+            case GCP: return GS;
             default: throw new IllegalArgumentException("Unsupported provider for object storage: " + provider);
         }
     }

@@ -19,14 +19,13 @@ import {inject, observer} from 'mobx-react';
 import {computed, observable} from 'mobx';
 import {Link} from 'react-router';
 import FileSaver from 'file-saver';
-import moment from 'moment';
 import {Alert, Card, Col, Collapse, Icon, Menu, message, Modal, Popover, Row, Spin} from 'antd';
 import SplitPane from 'react-split-pane';
-import pipelineRun from '../../../models/pipelines/PipelineRun';
 import {
   PipelineRunCommitCheck,
   PIPELINE_RUN_COMMIT_CHECK_FAILED
 } from '../../../models/pipelines/PipelineRunCommitCheck';
+import pipelineRun from '../../../models/pipelines/PipelineRun';
 import PausePipeline from '../../../models/pipelines/PausePipeline';
 import ResumePipeline from '../../../models/pipelines/ResumePipeline';
 import PipelineRunInfo from '../../../models/pipelines/PipelineRunInfo';
@@ -46,12 +45,14 @@ import {
 import connect from '../../../utils/connect';
 import evaluateRunDuration from '../../../utils/evaluateRunDuration';
 import displayDate from '../../../utils/displayDate';
+import displayDuration from '../../../utils/displayDuration';
 import roleModel from '../../../utils/roleModel';
 import localization from '../../../utils/localization';
 import parseRunServiceUrl from '../../../utils/parseRunServiceUrl';
 import parseQueryParameters from '../../../utils/queryParameters';
 import styles from './Log.css';
 import AdaptedLink from '../../special/AdaptedLink';
+import {getRunSpotTypeName} from '../../special/spot-instance-names';
 import {TaskLink} from './tasks/TaskLink';
 import LogList from './LogList';
 import StatusIcon from '../../special/run-status-icon';
@@ -67,6 +68,7 @@ import DockerImageLink from './DockerImageLink';
 const FIRE_CLOUD_ENVIRONMENT = 'FIRECLOUD';
 const DTS_ENVIRONMENT = 'DTS';
 const MAX_PARAMETER_VALUES_TO_DISPLAY = 5;
+const MAX_NESTED_RUNS_TO_DISPLAY = 10;
 
 @connect({
   pipelineRun,
@@ -90,6 +92,12 @@ const MAX_PARAMETER_VALUES_TO_DISPLAY = 5;
     runId: params.runId,
     taskName: params.taskName,
     run: pipelineRun.run(params.runId, {refresh: true}),
+    nestedRuns: pipelineRun.runFilter({
+      page: 1,
+      pageSize: MAX_NESTED_RUNS_TO_DISPLAY,
+      parentId: params.runId,
+      userModified: true
+    }, false),
     runSSH: new PipelineRunSSH(params.runId),
     runTasks: pipelineRun.runTasks(params.runId),
     task,
@@ -98,7 +106,7 @@ const MAX_PARAMETER_VALUES_TO_DISPLAY = 5;
   };
 })
 @observer
-export default class Logs extends localization.LocalizedReactComponent {
+class Logs extends localization.LocalizedReactComponent {
 
   @observable language = null;
   @observable _pipelineLanguage = null;
@@ -119,6 +127,7 @@ export default class Logs extends localization.LocalizedReactComponent {
   componentWillUnmount () {
     this.props.run.clearInterval();
     this.props.runTasks.clearInterval();
+    this.props.nestedRuns.clearRefreshInterval();
   }
 
   parentRunPipelineInfo = null;
@@ -404,7 +413,7 @@ export default class Logs extends localization.LocalizedReactComponent {
             value: (
               <span>
                 <AWSRegionTag
-                  style={{verticalAlign: 'top', marginRight: -3, marginLeft: -3}}
+                  style={{verticalAlign: 'top', marginLeft: -3, fontSize: 'larger'}}
                   regionId={instance.cloudRegionId} />
                 {instance.nodeType}
               </span>
@@ -417,16 +426,14 @@ export default class Logs extends localization.LocalizedReactComponent {
             key: 'Cloud Region',
             value: (
               <AWSRegionTag
-                style={{verticalAlign: 'top'}}
+                style={{verticalAlign: 'top', fontSize: 'larger'}}
                 regionId={instance.cloudRegionId} />
             )
           });
         }
-        if (instance.spot !== undefined) {
-          details.push(
-            {key: 'Price type', value: `${instance.spot}` === 'true' ? 'Spot' : 'On-demand'}
-          );
-        }
+        details.push(
+          {key: 'Price type', value: getRunSpotTypeName({instance})}
+        );
         if (instance.nodeDisk) {
           details.push({key: 'Disk', value: `${instance.nodeDisk}Gb`});
         }
@@ -475,18 +482,16 @@ export default class Logs extends localization.LocalizedReactComponent {
               <AWSRegionTag
                 regionId={instance.cloudRegionId}
                 displayName
-                style={{marginLeft: -5, verticalAlign: 'top'}} />
+                style={{marginLeft: -5, verticalAlign: 'top', fontSize: 'larger'}} />
             )
           });
         }
         if (instance.nodeType) {
           details.push({key: 'Node type', value: `${instance.nodeType}`});
         }
-        if (instance.spot !== undefined) {
-          details.push(
-            {key: 'Price type', value: `${instance.spot}` === 'true' ? 'Spot' : 'On-demand'}
-          );
-        }
+        details.push(
+          {key: 'Price type', value: getRunSpotTypeName({instance})}
+        );
         if (instance.nodeDisk) {
           details.push({key: 'Disk', value: `${instance.nodeDisk} Gb`});
         }
@@ -778,7 +783,7 @@ export default class Logs extends localization.LocalizedReactComponent {
       return '';
     }
     const {startDate} = this.props.run.value;
-    return moment.utc(startDate).fromNow(true);
+    return displayDuration(startDate);
   }
 
   @computed
@@ -786,7 +791,7 @@ export default class Logs extends localization.LocalizedReactComponent {
     if (this.props.runTasks.pending || this.props.runTasks.value.length === 0) {
       return '';
     }
-    return moment.utc(this.props.runTasks.value[0].started).fromNow(true);
+    return displayDuration(this.props.runTasks.value[0].started);
   }
 
   switchTimings = () => {
@@ -927,6 +932,79 @@ export default class Logs extends localization.LocalizedReactComponent {
     }
   };
 
+  renderNestedRuns = () => {
+    if (!this.props.nestedRuns.loaded ||
+      !this.props.nestedRuns.value ||
+      this.props.nestedRuns.value.length === 0) {
+      return null;
+    }
+    const {total} = this.props.nestedRuns;
+    const nestedRuns = (this.props.nestedRuns.value || [])
+      .map(r => r);
+    nestedRuns.sort((rA, rB) => {
+      if (rA.id > rB.id) {
+        return 1;
+      }
+      if (rA.id < rB.id) {
+        return -1;
+      }
+      return 0;
+    });
+    const renderSingleRun = (run, index) => {
+      const {
+        dockerImage,
+        endDate,
+        id,
+        pipelineName,
+        startDate,
+        version
+      } = run;
+      let executable = (dockerImage || '').split('/').pop();
+      if (pipelineName) {
+        executable = pipelineName;
+        if (version) {
+          executable = `${pipelineName} (${version})`;
+        }
+      }
+      const duration = displayDuration(startDate, endDate);
+      return (
+        <Link
+          key={index}
+          className={styles.nestedRun}
+          to={`/run/${run.id}`}
+        >
+          <StatusIcon run={run} small />
+          <b className={styles.runId}>{id}</b>
+          {executable && <span className={styles.details}>{executable}</span>}
+          {duration && <span className={styles.details}>{duration}</span>}
+        </Link>
+      );
+    };
+    return (
+      <tr>
+        <th
+          className={styles.nestedRunsHeader}
+        >
+          Nested runs:
+        </th>
+        <td
+          className={styles.nestedRuns}
+        >
+          {nestedRuns.map(renderSingleRun)}
+          {
+            total > MAX_NESTED_RUNS_TO_DISPLAY &&
+            <Link
+              className={styles.allNestedRuns}
+              to={`/runs/filter?search=${encodeURIComponent(`parent.id=${this.props.runId}`)}`}
+            >
+              show all {total} runs
+            </Link>
+          }
+        </td>
+      </tr>
+    );
+  };
+
   render () {
     if (this.props.run.error) {
       return <Alert type="error" message={this.props.run.error} />;
@@ -1056,9 +1134,8 @@ export default class Logs extends localization.LocalizedReactComponent {
             <th>Started: </th>
             <td>
               {displayDate(this.props.runTasks.value[0].started)} (
-              {moment
-                .utc(this.props.runTasks.value[0].started)
-                .diff(moment.utc(startDate), 'minutes', true).toFixed(2)} min)
+              {displayDuration(startDate, this.props.runTasks.value[0].started)}
+              )
             </td>
           </tr>);
         if (status === 'RUNNING') {
@@ -1067,24 +1144,20 @@ export default class Logs extends localization.LocalizedReactComponent {
           finishTime = (
             <tr>
               <th>Finished: </th>
-              <td>{displayDate(endDate)} (
-                {moment
-                  .utc(endDate)
-                  .diff(moment.utc(this.props.runTasks.value[0].started), 'minutes', true)
-                  .toFixed(2)
-                } min)
+              <td>
+                {displayDate(endDate)} (
+                {displayDuration(this.props.runTasks.value[0].started, endDate)}
+                )
               </td>
             </tr>);
         } else {
           finishTime = (
             <tr>
               <th>Stopped at: </th>
-              <td>{displayDate(endDate)} (
-                {moment
-                  .utc(endDate)
-                  .diff(moment.utc(this.props.runTasks.value[0].started), 'minutes', true)
-                  .toFixed(2)
-                } min)
+              <td>
+                {displayDate(endDate)} (
+                {displayDuration(this.props.runTasks.value[0].started, endDate)}
+                )
               </td>
             </tr>);
         }
@@ -1135,6 +1208,7 @@ export default class Logs extends localization.LocalizedReactComponent {
               {startedTime}
               {finishTime}
               {price}
+              {this.renderNestedRuns()}
             </tbody>
           </table>
         </div>;
@@ -1315,12 +1389,6 @@ export default class Logs extends localization.LocalizedReactComponent {
         <AdaptedLink to={switchModeUrl} location={location}>
           {this.props.params.mode.toLowerCase() === 'plain' ? 'GRAPH VIEW' : 'PLAIN VIEW'}
         </AdaptedLink>;
-
-      if (status === 'RUNNING' || status === 'PAUSING' || status === 'RESUMING') {
-        this.props.runTasks.startInterval();
-      } else {
-        this.props.runTasks.clearInterval();
-      }
     }
 
     return (
@@ -1423,5 +1491,18 @@ export default class Logs extends localization.LocalizedReactComponent {
     if (!this.props.runTasks.pending && this.graph) {
       this.graph.updateData();
     }
+    if (this.props.run.loaded) {
+      const {status} = this.props.run.value;
+      if (status === 'RUNNING' || status === 'PAUSING' || status === 'RESUMING') {
+        this.props.runTasks.startInterval();
+        this.props.nestedRuns.startRefreshInterval();
+      } else {
+        this.props.run.clearInterval();
+        this.props.runTasks.clearInterval();
+        this.props.nestedRuns.clearRefreshInterval();
+      }
+    }
   }
 }
+
+export default Logs;
