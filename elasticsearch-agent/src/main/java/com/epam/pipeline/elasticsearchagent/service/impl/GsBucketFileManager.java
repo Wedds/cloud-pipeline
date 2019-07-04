@@ -36,16 +36,19 @@ import org.elasticsearch.action.index.IndexRequest;
 
 import java.text.DateFormat;
 import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.*;
+import java.util.Collections;
+import java.util.Date;
+import java.util.Optional;
+import java.util.TimeZone;
+import java.util.Map;
+import java.util.HashMap;
 
 import static com.epam.pipeline.elasticsearchagent.utils.ESConstants.DOC_MAPPING_TYPE;
 
 @Slf4j
 public class GsBucketFileManager implements ObjectStorageFileManager {
-    private static final String DATE_TIME_FORMAT_PATTERN = "yyyy-MM-dd'T'HH:mm:ss'Z'";
     private static final String TIME_ZONE = "UTC";
     private final StorageFileMapper fileMapper = new StorageFileMapper();
 
@@ -83,8 +86,7 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
 
     private GoogleCredentials createGoogleCredentials(final TemporaryCredentials credentials) {
         try {
-            final DateFormat format =
-                    new SimpleDateFormat(DATE_TIME_FORMAT_PATTERN);
+            final DateFormat format = ESConstants.FILE_DATE_FORMAT;
             format.setTimeZone(TimeZone.getTimeZone(TIME_ZONE));
             final Date expirationDate = format.parse(credentials.getExpirationTime());
             final AccessToken token = new AccessToken(credentials.getToken(), expirationDate);
@@ -103,20 +105,20 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
                            final TemporaryCredentials credentials,
                            final PermissionsContainer permissions,
                            final String indexName) {
-        Optional.ofNullable(convertToStorageFile(file))
+        convertToStorageFile(file)
                 .ifPresent(
                     item -> indexContainer
                             .add(createIndexRequest(item,
-                                    indexName,
-                                    storage,
-                                    credentials.getRegion(),
-                                    permissions)));
+                                        indexName,
+                                        storage,
+                                        credentials.getRegion(),
+                                        permissions)));
     }
 
-    private DataStorageFile convertToStorageFile(final Blob blob) {
+    private Optional<DataStorageFile> convertToStorageFile(final Blob blob) {
         final String relativePath = blob.getName();
         if (StringUtils.endsWithIgnoreCase(relativePath, ESConstants.HIDDEN_FILE_NAME)) {
-            return null;
+            return Optional.empty();
         }
         final DataStorageFile file = new DataStorageFile();
         file.setName(relativePath);
@@ -125,13 +127,13 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
         file.setChanged(ESConstants.FILE_DATE_FORMAT.format(Date.from(Instant.ofEpochMilli(blob.getUpdateTime()))));
         file.setVersion(null);
         file.setDeleteMarker(null);
-        Map<String, String> labels = new HashMap<>(blob.getMetadata());
-        StorageClass storageClass = blob.getStorageClass();
+        final Map<String, String> labels = new HashMap<>(blob.getMetadata());
+        final StorageClass storageClass = blob.getStorageClass();
         if (storageClass != null) {
             labels.put("StorageClass", storageClass.name());
         }
         file.setLabels(labels);
-        return file;
+        return Optional.of(file);
     }
 
     private IndexRequest createIndexRequest(final DataStorageFile item,
@@ -143,5 +145,4 @@ public class GsBucketFileManager implements ObjectStorageFileManager {
                 .source(fileMapper.fileToDocument(item, storage, region, permissions,
                         SearchDocumentType.GS_FILE));
     }
-
 }

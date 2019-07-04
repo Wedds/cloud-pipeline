@@ -28,7 +28,9 @@ import org.mockito.Mockito;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnitRunner;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 import static org.mockito.internal.verification.VerificationModeFactory.times;
 
@@ -92,5 +94,4 @@ public class GsBucketFileManagerTest {
     private Blob createHiddenBlob(final String name) {
         return createBlob(name + ESConstants.HIDDEN_FILE_NAME.toLowerCase());
     }
-
 }
