@@ -23,6 +23,7 @@ import com.epam.pipeline.entity.datastorage.GSBucketStorage;
 import com.epam.pipeline.entity.datastorage.TemporaryCredentials;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.StorageClass;
+import org.apache.commons.lang3.StringUtils;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -31,9 +32,12 @@ import org.mockito.Mockito;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnitRunner;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Arrays;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,14 +48,18 @@ import static org.hamcrest.Matchers.hasEntry;
 
 @RunWith(MockitoJUnitRunner.class)
 public class GsBucketFileManagerTest {
-    private final String indexName = "testIndex";
+    private static final String INDEX_NAME = "testIndex";
+    private static final String TEST_BLOB_NAME_1 = "1";
+    private static final String TEST_BLOB_NAME_2 = "2";
+
     @Spy
     private final GsBucketFileManager manager = new GsBucketFileManager();
+    @Mock
+    private IndexRequestContainer requestContainer;
+
     private final AbstractDataStorage dataStorage = new GSBucketStorage();
     private final TemporaryCredentials temporaryCredentials = new TemporaryCredentials();
     private final PermissionsContainer permissionsContainer = new PermissionsContainer();
-    @Mock
-    private IndexRequestContainer requestContainer;
 
     @Test
     public void shouldAddZeroFilesToRequestContainer() {
@@ -61,46 +69,60 @@ public class GsBucketFileManagerTest {
 
     @Test
     public void shouldAddTwoFilesToRequestContainer() {
-        final List<Blob> files = Arrays.asList(createBlob("1"), createBlob("2"));
+        final List<Blob> files = Arrays.asList(createBlob(TEST_BLOB_NAME_1), createBlob(TEST_BLOB_NAME_2));
         verifyRequestContainerState(files, 2);
     }
 
     @Test
     public void shouldNotAddHiddenFilesToRequestContainer() {
-        final List<Blob> files = Arrays.asList(createBlob("1"), createHiddenBlob("2"));
+        final List<Blob> files = Arrays.asList(createBlob(TEST_BLOB_NAME_1), createHiddenBlob(TEST_BLOB_NAME_2));
         verifyRequestContainerState(files, 1);
     }
 
     private void verifyRequestContainerState(final List<Blob> files, final int numberOfInvocation) {
         setUpReturnValues(files);
-        manager.listAndIndexFiles(indexName,
-                dataStorage,
-                temporaryCredentials,
-                permissionsContainer,
-                requestContainer);
+        manager.listAndIndexFiles(INDEX_NAME,
+                                  dataStorage,
+                                  temporaryCredentials,
+                                  permissionsContainer,
+                                  requestContainer);
         verifyNumberOfInsertions(numberOfInvocation);
         verifyBlobMapping(files, numberOfInvocation);
     }
 
     private void setUpReturnValues(final List<Blob> files) {
         Mockito.doReturn(files)
-                .when(manager)
-                .getAllBlobsFromStorage(dataStorage, temporaryCredentials);
+               .when(manager)
+               .getAllBlobsFromStorage(dataStorage, temporaryCredentials);
     }
 
     private void verifyBlobMapping(final List<Blob> files, final int numberOfInvocation) {
+        final List<DataStorageFile> capturedValues = captureDataStorageFilesIndexing(numberOfInvocation);
+        final Map<String, DataStorageFile> dsFiles =
+                capturedValues.stream()
+                              .collect(Collectors.toMap(DataStorageFile::getName,
+                                                        Function.identity()));
+        files.stream().filter(this::isNotHiddenBlob)
+             .forEach(blob -> assertBlobToFile(blob, dsFiles.get(blob.getName())));
+    }
+
+    private boolean isNotHiddenBlob(final Blob blob) {
+        return !StringUtils.endsWithIgnoreCase(blob.getName(), ESConstants.HIDDEN_FILE_NAME);
+    }
+
+    private List<DataStorageFile> captureDataStorageFilesIndexing(final int numberOfInvocation) {
         final ArgumentCaptor<DataStorageFile> captor = ArgumentCaptor.forClass(DataStorageFile.class);
         verify(manager, times(numberOfInvocation))
                 .createIndexRequest(captor.capture(), any(), any(), any(), any());
-        final List<DataStorageFile> capturedValues = captor.getAllValues();
-        for (int i = 0; i < numberOfInvocation; i++) {
-            Blob blob = files.get(i);
-            DataStorageFile fileToBeVerified = capturedValues.get(i);
-            assertEquals(blob.getName(), fileToBeVerified.getName());
-            assertEquals(blob.getSize(), fileToBeVerified.getSize());
-            assertThat(fileToBeVerified.getLabels(),
-                    hasEntry(ESConstants.STORAGE_CLASS_LABEL, blob.getStorageClass().name()));
-        }
+        return captor.getAllValues();
+    }
+
+    private void assertBlobToFile(final Blob blob, final DataStorageFile file) {
+        assertEquals(blob.getName(), file.getName());
+        assertEquals(blob.getName(), file.getPath());
+        assertEquals(blob.getSize(), file.getSize());
+        assertThat(file.getLabels(),
+                   hasEntry(ESConstants.STORAGE_CLASS_LABEL, blob.getStorageClass().name()));
     }
 
     private void verifyNumberOfInsertions(final int numberOfInvocation) {
