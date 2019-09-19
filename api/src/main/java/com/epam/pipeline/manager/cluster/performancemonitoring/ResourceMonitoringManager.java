@@ -19,6 +19,7 @@ package com.epam.pipeline.manager.cluster.performancemonitoring;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -72,6 +73,9 @@ public class ResourceMonitoringManager extends AbstractSchedulingManager {
     private static final int MILLIS = 1000;
     private static final double PERCENT = 100.0;
     private static final double ONE_THOUSANDTH = 0.001;
+    private static final String UTILIZATION_LEVEL_LOW = "IDLED";
+    private static final String UTILIZATION_LEVEL_HIGH = "PRESSURED";
+    private static final String TRUE_VALUE_STRING = "true";
 
     private final PipelineRunManager pipelineRunManager;
     private final NotificationManager notificationManager;
@@ -118,11 +122,12 @@ public class ResourceMonitoringManager extends AbstractSchedulingManager {
     public void monitorResourceUsage() {
         List<PipelineRun> runs = pipelineRunManager.loadRunningPipelineRuns();
 
-        processIdleRuns(runs);
-        processOverloadedRuns(runs);
+        final List<PipelineRun> runsToUpdateTags = processIdleRuns(runs);
+        runsToUpdateTags.addAll(processOverloadedRuns(runs));
+        pipelineRunManager.updateRunsTags(runsToUpdateTags);
     }
 
-    private void processOverloadedRuns(final List<PipelineRun> runs) {
+    private List<PipelineRun> processOverloadedRuns(final List<PipelineRun> runs) {
         final Map<String, PipelineRun> running = runs.stream()
                 .filter(r -> {
                     final boolean hasNodeName = Objects.nonNull(r.getInstance())
@@ -156,7 +161,63 @@ public class ResourceMonitoringManager extends AbstractSchedulingManager {
                 .filter(pod -> isPodUnderPressure(pod.getValue(), thresholds))
                 .collect(Collectors.toList());
 
+        final List<PipelineRun> runsToUpdateTags = getRunsToUpdatePressuredTags(running, runsToNotify);
         notificationManager.notifyHighResourceConsumingRuns(runsToNotify, NotificationType.HIGH_CONSUMED_RESOURCES);
+        return runsToUpdateTags;
+    }
+
+    private List<PipelineRun> getRunsToUpdatePressuredTags(final Map<String, PipelineRun> running,
+                              final List<Pair<PipelineRun, Map<ELKUsageMetric, Double>>> runsToNotify) {
+        final List<PipelineRun> listOfRunsToNotify = runsToNotify
+                .stream()
+                .map(Pair::getLeft)
+                .collect(Collectors.toList());
+
+        final List<PipelineRun> runsToUpdateTags = listOfRunsToNotify
+                .stream()
+                .filter(this::hasNoPressuredTag)
+                .map(this::addPressuredTagToRun)
+                .collect(Collectors.toList());
+
+        final Collection<PipelineRun> runningList = running.values();
+        runningList.removeAll(listOfRunsToNotify);
+
+        final List<PipelineRun> removeTag = runningList
+                .stream()
+                .filter(this::hasPressuredTag)
+                .map(this::removePressuredTagFromRun)
+                .collect(Collectors.toList());
+
+        runsToUpdateTags.addAll(removeTag);
+        return runsToUpdateTags;
+    }
+
+    private boolean hasPressuredTag(final PipelineRun run) {
+        final String tagToBeRemoved = run.getTags().get(UTILIZATION_LEVEL_HIGH);
+        return tagToBeRemoved != null
+                && tagToBeRemoved.equals(TRUE_VALUE_STRING);
+    }
+
+    private boolean hasNoPressuredTag(final PipelineRun run) {
+        return run.getTags().get(UTILIZATION_LEVEL_HIGH) == null;
+    }
+
+    private PipelineRun removePressuredTagFromRun(final PipelineRun run) {
+        removeTagFromRun(run, UTILIZATION_LEVEL_HIGH);
+        return run;
+    }
+
+    private void removeTagFromRun(final PipelineRun run, final String tag) {
+        run.getTags().remove(tag);
+    }
+
+    private PipelineRun addPressuredTagToRun(final PipelineRun run) {
+        addTagToRun(run, UTILIZATION_LEVEL_HIGH, TRUE_VALUE_STRING);
+        return run;
+    }
+
+    private void addTagToRun(final PipelineRun run, final String tag, final String value) {
+        run.getTags().put(tag, value);
     }
 
     private Pair<PipelineRun, Map<ELKUsageMetric, Double>> matchRunAndMetrics(
@@ -193,7 +254,7 @@ public class ResourceMonitoringManager extends AbstractSchedulingManager {
         return result;
     }
 
-    private void processIdleRuns(final List<PipelineRun> runs) {
+    private List<PipelineRun> processIdleRuns(final List<PipelineRun> runs) {
         final Map<String, PipelineRun> running = runs.stream()
                 .collect(Collectors.toMap(PipelineRun::getPodId, r -> r));
 
@@ -221,16 +282,18 @@ public class ResourceMonitoringManager extends AbstractSchedulingManager {
         final IdleRunAction action = IdleRunAction.valueOf(preferenceManager
                 .getPreference(SystemPreferences.SYSTEM_IDLE_ACTION));
 
+        final List<PipelineRun> runsToUpdateTags = new ArrayList<>(running.size());
         final List<PipelineRun> runsToUpdate = processRuns(notProlongedRuns, cpuMetrics,
-                idleCpuLevel, actionTimeout, action);
+                idleCpuLevel, actionTimeout, action, runsToUpdateTags);
         pipelineRunManager.updatePipelineRunsLastNotification(runsToUpdate);
+        return runsToUpdateTags;
     }
 
     private List<PipelineRun> processRuns(Map<String, PipelineRun> running, Map<String, Double> cpuMetrics,
-                                          double idleCpuLevel, int actionTimeout, IdleRunAction action) {
+                                          double idleCpuLevel, int actionTimeout, IdleRunAction action,
+                                          List<PipelineRun> runsToUpdateTags) {
         List<PipelineRun> runsToUpdate = new ArrayList<>(running.size());
         List<Pair<PipelineRun, Double>> runsToNotify = new ArrayList<>(running.size());
-
         for (Map.Entry<String, PipelineRun> entry : running.entrySet()) {
             PipelineRun run = entry.getValue();
             if (run.isNonPause() || isClusterRun(run)) {
@@ -243,13 +306,20 @@ public class ResourceMonitoringManager extends AbstractSchedulingManager {
                 double cpuUsageRate = metric / MILLIS / type.getVCPU();
                 if (Precision.compareTo(cpuUsageRate, idleCpuLevel, ONE_THOUSANDTH) < 0) {
                     processIdleRun(run, actionTimeout, action, runsToNotify, runsToUpdate, cpuUsageRate);
+                    if (run.getTags().put(UTILIZATION_LEVEL_LOW, TRUE_VALUE_STRING) == null) {
+                        runsToUpdateTags.add(run);
+                    }
                 } else if (run.getLastIdleNotificationTime() != null) { // No action is longer needed, clear timeout
                     run.setLastIdleNotificationTime(null);
+                    final String tagToBeRemoved = run.getTags().remove(UTILIZATION_LEVEL_LOW);
+                    if (tagToBeRemoved != null
+                            && tagToBeRemoved.equals(TRUE_VALUE_STRING)) {
+                        runsToUpdateTags.add(run);
+                    }
                     runsToUpdate.add(run);
                 }
             }
         }
-
         notificationManager.notifyIdleRuns(runsToNotify, NotificationType.IDLE_RUN);
         return runsToUpdate;
     }
